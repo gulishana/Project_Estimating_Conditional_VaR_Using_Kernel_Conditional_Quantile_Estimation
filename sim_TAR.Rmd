@@ -1,0 +1,657 @@
+---
+title: "Simulation"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, 
+                      echo=TRUE, eval=TRUE)
+```
+
+
+
+
+## TAR model
+
+$$
+Z_t = \left\{ \begin{array}{ll}    
+a \ Z_{t-1} + \varepsilon_t, & Z_{t-1} \geq 1 \\
+b \ Z_{t-1} + \varepsilon_t, & Z_{t-1} < 1
+\end{array} \right. = (a\ \mathbf{1}_{Z_{t-1}\geq1} + b\ \mathbf{1}_{Z_{t-1}<1}) \ Z_{t-1} + \varepsilon_t, \ \ \ \ \ t\in \mathbb{Z}
+$$
+where $\varepsilon_t \sim N(0,1)$, $a=0.8$, and $b=1.2$.
+
+
+
+### Model's specific functions
+
+```{r}
+func = function(x){  ifelse(x>=1,0.8,1.2) * abs(x-1)  }
+# Zt = func(Zt-1) + N(0,1)
+```
+
+```{r}
+# function for generating sample {Xt,Zt} t=1,...,n
+simulate_data = function(n_sample, cutoff=0.05){
+    # generate sample {Zt}
+    #n_sample = n_sample / (1 - 2*cutoff)
+    n_sample = n_sample + 1
+    burn_in = 100
+    n = n_sample + burn_in
+    Z = rep(NA,n)
+    Z[1] = 0
+    for (i in 2:n) {
+        Z[i] = func(Z[i-1]) + rnorm(1,0,1)
+    }
+    Z = Z[-(1:burn_in)]
+        
+    # then generate {Xt,Zt} t=1,...,n, where Xt = Zt-1
+    X = Z[1:(n_sample-1)]
+    Z = Z[2:n_sample]
+    
+    # cutoff the tail extreme values of each end
+    cuts = as.vector(quantile(X, probs=c(cutoff,1-cutoff))) # both ends of X
+    index = which((X>cuts[1]) & (X<cuts[2]))
+    X_cut = X[index]
+    Z_cut = Z[index]
+
+    return(list(X=X, Z=Z, X_cut=X_cut, Z_cut=Z_cut, cuts=cuts))
+}
+```
+
+```{r}
+# function for calculating theoretical conditional quantile
+theo_con_q = function(x,p){ 
+    qnorm(p,0,1,lower.tail=TRUE) + func(x)
+#   qnorm(p,func(x),1,lower.tail=TRUE)
+}
+```
+
+
+
+
+
+
+### Data Simulation
+
+```{r}
+# simulate a group of data
+set.seed(123)
+data = simulate_data(n_sample=500, cutoff=0.05)
+X = data$X
+Z = data$Z
+X_cut = data$X_cut
+Z_cut = data$Z_cut
+```
+
+```{r}
+print("whole data")
+c(min(X),max(X))
+c(min(Z),max(Z))
+print("cutted data")
+c(min(X_cut),max(X_cut))
+c(min(Z_cut),max(Z_cut))
+```
+
+```{r, fig.height=3.5, fig.width=6}
+# check the distribution of simulated data Zt
+plot(Z, type="l", ylab=expression(Z[t]))
+hist(Z, breaks=100, freq=FALSE, main="", xlab=expression(Z[t]))
+lines(density(Z, adjust=1),col="red",lwd=2) # kernel density estimation
+zz = seq(min(Z),max(Z),0.01)
+lines(zz, dnorm(zz,mean(Z),sd(Z)), col="blue",lwd=2)
+
+plot(Z_cut, type="l", ylab=expression(Z[t]))
+hist(Z_cut, breaks=100, freq=FALSE, main="", xlab=expression(Z[t]))
+lines(density(Z_cut, adjust=1),col="red",lwd=2) # kernel density estimation
+zz_cut = seq(min(Z_cut),max(Z_cut),0.01)
+lines(zz_cut, dnorm(zz_cut,mean(Z_cut),sd(Z_cut)), col="blue",lwd=2)
+```
+
+
+```{r}
+# check the scatterplot of {Xt, Zt} t=1,...,n
+plot(X, Z, xlab=expression(X[t]), ylab=expression(Z[t]))
+plot(X_cut, Z_cut, xlab=expression(X[t]), ylab=expression(Z[t]))
+```
+
+
+
+
+### Theoretical Conditional VaR
+
+```{r, fig.height=5, fig.width=8}
+# plot 95% & 99% Conditional VaR
+
+# whole data
+xx = seq(min(X),max(X),0.01)
+plot(xx, theo_con_q(xx,1-0.99), col="blue", type="l",
+     xlab=expression(X[t]), ylab=" theoretical VaR", main="TAR model",
+     ylim=c(min(theo_con_q(xx,1-0.99)),max(theo_con_q(xx,1-0.95))) )
+lines(xx, theo_con_q(xx,1-0.95), col="red")
+legend("top",legend=c("99% VaR (1% quantile)","95% VaR (5% quantile)"),
+       col=c("blue","red"),lty=1, cex=0.8)
+
+# cutoff data
+xx = seq(min(X_cut),max(X_cut),0.01)
+plot(xx, theo_con_q(xx,1-0.99), col="blue", type="l",
+     xlab=expression(X[t]), ylab=" theoretical VaR", main="TAR model",
+     ylim=c(min(theo_con_q(xx,1-0.99)),max(theo_con_q(xx,1-0.95))) )
+lines(xx, theo_con_q(xx,1-0.95), col="red")
+legend("top",legend=c("99% VaR (1% quantile)","95% VaR (5% quantile)"),
+       col=c("blue","red"),lty=1, cex=0.8)
+```
+
+```{r}
+# plot theoretical VaR on the scatterplot of {Xt, Zt} t=1,...,n
+xx = seq(min(X),max(X),0.01)
+plot(X, Z, ylim=c(min(Z)-5,max(Z)+5), 
+     xlab=expression(X[t]), ylab=expression(Z[t]), main="Theoretical Quantiles")
+lines(xx, theo_con_q(xx,1-0.99), col="blue")
+lines(xx, theo_con_q(xx,1-0.95), col="red")
+lines(xx, theo_con_q(xx,1-0.05), col="green")
+lines(xx, theo_con_q(xx,1-0.01), col="orange")
+legend("top",legend=c("99% VaR (1% quantile)","95% VaR (5% quantile)",
+                      "5% VaR (95% quantile)","1% VaR (99% quantile)"),
+       col=c("blue","red","green","orange"),lty=1, cex=0.8)
+
+# cutoff data
+xx = seq(min(X_cut),max(X_cut),0.01)
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-1,max(Z_cut)+2), 
+     xlab=expression(X[t]), ylab=expression(Z[t]), main="Theoretical Quantiles")
+lines(xx, theo_con_q(xx,1-0.99), col="blue")
+lines(xx, theo_con_q(xx,1-0.95), col="red")
+lines(xx, theo_con_q(xx,1-0.05), col="green")
+lines(xx, theo_con_q(xx,1-0.01), col="orange")
+legend("top",legend=c("99% VaR (1% quantile)","95% VaR (5% quantile)",
+                      "5% VaR (95% quantile)","1% VaR (99% quantile)"),
+       col=c("blue","red","green","orange"),lty=1, cex=0.8)
+
+```
+
+In practical, people care about the 95% VaR (5% quantile) or 99% VaR (1% quantile), which represents the losses in the worst cases. 
+
+
+
+
+
+### Estimating the Conditional VaR
+
+
+```{r}
+# function for estimating conditional quantile
+kernel_con_q_est = function(X,Z,p,h){
+    
+    # generate grids for X & Z(quantile) directions
+    xx = seq(min(X), max(X), length.out=1000)
+    #xx = X[order(X)]
+    qq = Z[order(Z)] 
+    
+    # calculate the weight Wi(x) for each x in the xx
+    kernel_m = outer(xx,X,"-")
+    kernel_d = dnorm(kernel_m/h)     # Gaussian Kernel with bandwidth h
+    W = kernel_d / rowSums(kernel_d)
+    
+    # get the quantile q(x) for each x in the xx,  s.t. Fn(x) closest to p
+    qq_est = rep(NA,length(xx))
+    for (i in 1:length(xx)) {
+        Fns = rep(NA,length(qq))
+        for (j in 1:length(qq)) {
+            Fns[j] = sum( W[i,]*(Z<=qq[j]) )  # element-wise production
+        }
+        index = which.min(abs(Fns-p))
+        qq_est[i] = qq[index]
+    }
+    return(list(xx=xx, qq_est=qq_est))
+}
+```
+
+
+```{r}
+# estimate conditional quantile with "kernel conditional quantile estimation"
+library(KernSmooth)
+
+estimate_con_q = function(X,Z,p,h0.5=NULL,dpill_trim){
+    # get h0.5 if not given
+    if (is.null(h0.5)) { 
+        h0.5 = dpill(X,Z, trim=dpill_trim,      #  trim = min(0.05,10/length(X))
+                     blockmax=ceiling(length(X)/10), divisor=10)
+    }
+    
+    # calculate optimal h
+    opt_h = (2/pi * p*(1-p) * dnorm(qnorm(p))^(-2) * h0.5^5) ^ (1/5)
+        
+    # estimate conditional quantile using opt_h
+    qq_est1 = kernel_con_q_est(X,Z,p,opt_h)
+        
+    # estimate conditional quantile using sqrt(2)*opt_h
+    qq_est2 = kernel_con_q_est(X,Z,p,sqrt(2)*opt_h)
+        
+    # bias correction
+    qq_est = 2*qq_est1$qq_est - qq_est2$qq_est
+    
+    return(list(xx=qq_est1$xx, qq_est=qq_est, h0.5=h0.5, opt_h=opt_h))
+}
+```
+
+
+
+#### Estimate the cutted data
+
+```{r}
+# estimate the conditional quantile (cutted)
+est_01 = estimate_con_q(X_cut,Z_cut,p=1-0.99, dpill_trim=0.01)
+est_05 = estimate_con_q(X_cut,Z_cut,p=1-0.95, dpill_trim=0.01)
+c(est_01$h0.5, est_01$opt_h)
+c(est_05$h0.5, est_05$opt_h)
+```
+
+```{r}
+# plot estimated VaR on the scatterplot of {Xt, Zt} t=1,...,n
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-1,max(Z_cut)+2), 
+     xlab=expression(X[t]), ylab=expression(Z[t]), main="Original Quantile Estimation")
+lines(est_01$xx, theo_con_q(est_01$xx,1-0.99), col="blue")
+lines(est_05$xx, theo_con_q(est_05$xx,1-0.95), col="red")
+lines(est_01$xx, est_01$qq_est, col="green")
+lines(est_05$xx, est_05$qq_est, col="orange")
+legend("topleft",col=c("blue","red"),lty=1, cex=0.8,
+       legend=c("Theoretical 99% VaR (1% quantile)","Theoretical 95% VaR (5% quantile)"))
+legend("topright",col=c("green","orange"),lty=1, cex=0.8,
+       legend=c("Estimated 99% VaR (1% quantile)","Estimated 95% VaR (5% quantile)"))
+```
+
+
+#### 2nd smoothing: ksmooth()
+
+```{r}
+# select best smoothing bandwidth
+bs = seq(0.1,max(est_01$xx)-min(est_01$xx),0.1)
+DMAE_ksmooth = matrix(NA,length(bs),4)
+colnames(DMAE_ksmooth) = c("bs","DMAE-1%","DMAE-5%","sum")
+for (i in 1:length(bs)) {
+    DMAE_ksmooth[i,1] = bs[i]
+    est_01_s = ksmooth(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=bs[i])$y
+    est_05_s = ksmooth(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=bs[i])$y
+    DMAE_ksmooth[i,2] = mean(abs(theo_con_q(est_01$xx,1-0.99) - est_01_s))
+    DMAE_ksmooth[i,3] = mean(abs(theo_con_q(est_05$xx,1-0.95) - est_05_s))
+    DMAE_ksmooth[i,4] = mean(DMAE_ksmooth[i,2:3])
+}
+min_b_ksmooth_01 = DMAE_ksmooth[,1][which.min(DMAE_ksmooth[,2])]
+min_b_ksmooth_05 = DMAE_ksmooth[,1][which.min(DMAE_ksmooth[,3])]
+c(min_b_ksmooth_01, min_b_ksmooth_05)
+c(min(DMAE_ksmooth[,2]), min(DMAE_ksmooth[,3]))
+```
+
+```{r}
+b_01 = dpill(est_01$xx,est_01$qq_est,trim=0.01)
+b_05 = dpill(est_05$xx,est_05$qq_est,trim=0.01)
+c(b_01, b_05)
+```
+
+```{r, fig.width=6, fig.height=4}
+plot(DMAE_ksmooth[,2]~DMAE_ksmooth[,1],xlab="bandwidth",ylab="DMAE",main="DMAE(p) for p = 1%")
+abline(v=min_b_ksmooth_01,col="red")
+abline(v=est_01$opt_h,col="blue")
+abline(v=b_01,col="green")
+legend("bottomright",legend=c("best bandwidth with minimum DMAE","optimal bandwidth in original estimation","dpill() selected bandwidth"), col=c("red","blue","green"), lty=1, cex=0.8)
+
+plot(DMAE_ksmooth[,3]~DMAE_ksmooth[,1],xlab="bandwidth",ylab="DMAE",main="DMAE(p) for p = 5%")
+abline(v=min_b_ksmooth_05,col="red")
+abline(v=est_05$opt_h,col="blue")
+abline(v=b_05,col="green")
+legend("bottomright",legend=c("best bandwidth with minimum DMAE","optimal bandwidth in original estimation","dpill() selected bandwidth"), col=c("red","blue","green"), lty=1, cex=0.8)
+```
+
+
+# 2nd smoothing: locpoly() - degree = 2
+
+```{r}
+# select best smoothing bandwidth
+bs = seq(0.1,max(est_01$xx)-min(est_01$xx),0.1)
+DMAE_locpoly = matrix(NA,length(bs),4)
+colnames(DMAE_locpoly) = c("bs","DMAE-1%","DMAE-5%","sum")
+for (i in 1:length(bs)) {
+    DMAE_locpoly[i,1] = bs[i]
+    est_01_s = locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=bs[i],
+                                                        gridsize=1000,degree=2)$y
+    est_05_s = locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=bs[i],
+                                                        gridsize=1000,degree=2)$y
+    DMAE_locpoly[i,2] = mean(abs(theo_con_q(est_01$xx,1-0.99) - est_01_s))
+    DMAE_locpoly[i,3] = mean(abs(theo_con_q(est_05$xx,1-0.95) - est_05_s))
+    DMAE_locpoly[i,4] = mean(DMAE_locpoly[i,2:3])
+}
+min_b_locpoly_01 = DMAE_locpoly[,1][which.min(DMAE_locpoly[,2])]
+min_b_locpoly_05 = DMAE_locpoly[,1][which.min(DMAE_locpoly[,3])]
+c(min_b_locpoly_01, min_b_locpoly_05)
+c(min(DMAE_locpoly[,2]), min(DMAE_locpoly[,3]))
+```
+
+```{r, fig.width=6, fig.height=4}
+plot(DMAE_locpoly[,2]~DMAE_locpoly[,1],xlab="bandwidth",ylab="DMAE",main="DMAE(p) for p = 1%")
+abline(v=min_b_locpoly_01,col="red")
+abline(v=est_01$opt_h,col="blue")
+abline(v=b_01,col="green")
+legend("bottomright",legend=c("best bandwidth with minimum DMAE","optimal bandwidth in original estimation","dpill() selected bandwidth"), col=c("red","blue","green"), lty=1, cex=0.8)
+
+plot(DMAE_locpoly[,3]~DMAE_locpoly[,1],xlab="bandwidth",ylab="DMAE",main="DMAE(p) for p = 5%")
+abline(v=min_b_locpoly_05,col="red")
+abline(v=est_05$opt_h,col="blue")
+abline(v=b_05,col="green")
+legend("bottomright",legend=c("best bandwidth with minimum DMAE","optimal bandwidth in original estimation","dpill() selected bandwidth"), col=c("red","blue","green"), lty=1, cex=0.8)
+```
+
+
+
+
+#### The Plot for ksmooth & locpoly
+
+```{r}
+# plot estimated VaR on the scatterplot of {Xt, Zt} t=1,...,n  (cutted)
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-1,max(Z_cut)+2), 
+     xlab=expression(X[t]), ylab=expression(Z[t]), main="Smoothed Quantile Estimation (ksmooth)")
+lines(est_01$xx, theo_con_q(est_01$xx,1-0.99), col="blue")
+lines(est_05$xx, theo_con_q(est_05$xx,1-0.95), col="red")
+lines(ksmooth(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h), col="green")
+lines(ksmooth(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h), col="orange")
+legend("topleft",col=c("blue","red"),lty=1, cex=0.8,
+       legend=c("Theoretical 99% VaR (1% quantile)","Theoretical 95% VaR (5% quantile)"))
+legend("topright",col=c("green","orange"),lty=1, cex=0.8,
+       legend=c("Estimated 99% VaR (1% quantile)","Estimated 95% VaR (5% quantile)"))
+
+
+# plot estimated VaR on the scatterplot of {Xt, Zt} t=1,...,n  (cutted)
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-1,max(Z_cut)+2), 
+     xlab=expression(X[t]), ylab=expression(Z[t]), main="Smoothed Quantile Estimation (locpoly, degree=1)")
+lines(est_01$xx, theo_con_q(est_01$xx,1-0.99), col="blue")
+lines(est_05$xx, theo_con_q(est_05$xx,1-0.95), col="red")
+lines(locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h,gridsize=1000), col="green")
+lines(locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h,gridsize=1000), col="orange")
+legend("topleft",col=c("blue","red"),lty=1, cex=0.8,
+       legend=c("Theoretical 99% VaR (1% quantile)","Theoretical 95% VaR (5% quantile)"))
+legend("topright",col=c("green","orange"),lty=1, cex=0.8,
+       legend=c("Estimated 99% VaR (1% quantile)","Estimated 95% VaR (5% quantile)"))
+
+
+# plot estimated VaR on the scatterplot of {Xt, Zt} t=1,...,n  (cutted)
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-1,max(Z_cut)+2), 
+     xlab=expression(X[t]), ylab=expression(Z[t]), main="Smoothed Quantile Estimation (locpoly, degree=2)")
+lines(est_01$xx, theo_con_q(est_01$xx,1-0.99), col="blue")
+lines(est_05$xx, theo_con_q(est_05$xx,1-0.95), col="red")
+lines(locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h,gridsize=1000,degree=2), col="green")
+lines(locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h,gridsize=1000,degree=2), col="orange")
+legend("topleft",col=c("blue","red"),lty=1, cex=0.8,
+       legend=c("Theoretical 99% VaR (1% quantile)","Theoretical 95% VaR (5% quantile)"))
+legend("topright",col=c("green","orange"),lty=1, cex=0.8,
+       legend=c("Estimated 99% VaR (1% quantile)","Estimated 95% VaR (5% quantile)"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Calculate the DMAE for multiple simulations
+
+```{r}
+# function for running multiple simulations and calculate the average DMAE
+
+average_DMAE = function(n_sample, n_sim){
+    
+    total.start = Sys.time()
+    
+    DMAEs_ksm0.01 = DMAEs_ksm0.05 = NULL
+    DMAEs_loc0.01 = DMAEs_loc0.05 = NULL
+    DMAEs_loc0.01_d2 = DMAEs_loc0.05_d2 = NULL
+    
+    theo_q_range0.01 = theo_q_range0.05 = matrix(NA,n_sim,2)
+    
+    Z_range = matrix(NA,n_sim,2)
+    
+    while (length(DMAEs_ksm0.01)<n_sim) {
+        
+        # generate sample {Xt,Zt} t=1,...,n
+        data = simulate_data(n_sample, cutoff=0.05)
+        X = data$X_cut
+        Z = data$Z_cut
+        
+        # get h0.5
+        h0.5 = try( dpill(X,Z, trim=0.01,
+                    blockmax=ceiling(length(X)/10),divisor=10), silent=TRUE)
+        # skip to next simulation if function gets: NaN or error(bandwidth<=0)
+        if (is.na(h0.5) | !is.numeric(h0.5)) { next }
+        
+        #######################################  0.01
+        # estimate the conditional quantile
+        con_q_est = estimate_con_q(X,Z,p=0.01,h0.5)
+        
+        # 2nd kernel smoothing of the estimates
+        qq_est_ksm0.01 = ksmooth(con_q_est$xx,con_q_est$qq_est,
+                                 kernel="normal",bandwidth=con_q_est$opt_h)$y
+        qq_est_loc0.01 = locpoly(con_q_est$xx,con_q_est$qq_est,
+                                 kernel="normal",bandwidth=con_q_est$opt_h,gridsize=1000)$y
+        qq_est_loc0.01_d2 = locpoly(con_q_est$xx,con_q_est$qq_est,
+                                 kernel="normal",bandwidth=con_q_est$opt_h,gridsize=1000,
+                                                                                degree=2)$y
+        #######################################  0.01
+        
+        #######################################  0.05
+        # estimate the conditional quantile
+        con_q_est = estimate_con_q(X,Z,p=0.05,h0.5)
+        
+        # 2nd kernel smoothing of the estimates
+        qq_est_ksm0.05 = ksmooth(con_q_est$xx,con_q_est$qq_est,
+                                 kernel="normal",bandwidth=con_q_est$opt_h)$y
+        qq_est_loc0.05 = locpoly(con_q_est$xx,con_q_est$qq_est,
+                                 kernel="normal",bandwidth=con_q_est$opt_h,gridsize=1000)$y
+        qq_est_loc0.05_d2 = locpoly(con_q_est$xx,con_q_est$qq_est,
+                                 kernel="normal",bandwidth=con_q_est$opt_h,gridsize=1000,
+                                                                                degree=2)$y
+        #######################################  0.05
+        
+        # calculate the theoretical conditional quantile
+        theo_qq0.01 = theo_con_q(con_q_est$xx, p=0.01)
+        theo_qq0.05 = theo_con_q(con_q_est$xx, p=0.05)
+        
+        # calculate DMAE
+        DMAEs_ksm0.01 = c(DMAEs_ksm0.01, mean(abs(qq_est_ksm0.01 - theo_qq0.01)))
+        DMAEs_loc0.01 = c(DMAEs_loc0.01, mean(abs(qq_est_loc0.01 - theo_qq0.01)))
+        DMAEs_loc0.01_d2 = c(DMAEs_loc0.01_d2, mean(abs(qq_est_loc0.01_d2 - theo_qq0.01)))
+        
+        
+        DMAEs_ksm0.05 = c(DMAEs_ksm0.05, mean(abs(qq_est_ksm0.05 - theo_qq0.05)))
+        DMAEs_loc0.05 = c(DMAEs_loc0.05, mean(abs(qq_est_loc0.05 - theo_qq0.05)))
+        DMAEs_loc0.05_d2 = c(DMAEs_loc0.05_d2, mean(abs(qq_est_loc0.05_d2 - theo_qq0.05)))
+        
+        # store the range of theoretical conditional quantile
+        theo_q_range0.01[length(DMAEs_ksm0.01), ] = c(min(theo_qq0.01), max(theo_qq0.01))
+        theo_q_range0.05[length(DMAEs_ksm0.05), ] = c(min(theo_qq0.05), max(theo_qq0.05))
+        
+        # store the range of X & Z
+        Z_range[length(DMAEs_ksm0.01), ] = c(min(Z),max(Z))
+        
+        print(length(DMAEs_ksm0.01))
+    }
+    
+    total.time = as.numeric(Sys.time() - total.start)
+    
+    list0.01 = list(DMAEs_ksm=DMAEs_ksm0.01, ksm=mean(DMAEs_ksm0.01),
+                    DMAEs_loc=DMAEs_loc0.01, loc=mean(DMAEs_loc0.01),
+                    DMAEs_loc_d2=DMAEs_loc0.01_d2, loc_d2=mean(DMAEs_loc0.01_d2),
+                    theo_q_range=theo_q_range0.01)
+    
+    list0.05 = list(DMAEs_ksm=DMAEs_ksm0.05, ksm=mean(DMAEs_ksm0.05),
+                    DMAEs_loc=DMAEs_loc0.05, loc=mean(DMAEs_loc0.05),
+                    DMAEs_loc_d2=DMAEs_loc0.05_d2, loc_d2=mean(DMAEs_loc0.05_d2),
+                    theo_q_range=theo_q_range0.05)
+    
+    return(list(list0.01=list0.01, list0.05=list0.05, Z_range=Z_range, 
+                total.time=total.time))
+}
+```
+
+```{r, eval=FALSE}
+set.seed(123)
+DMAE_250 = average_DMAE(n_sample=250, n_sim=100)
+DMAE_500 = average_DMAE(n_sample=500, n_sim=100)
+DMAE_1000 = average_DMAE(n_sample=1000, n_sim=100)
+
+save(DMAE_250, DMAE_500, DMAE_1000,
+     file='sim_TAR.RData')
+```
+
+```{r, eval=FALSE}
+load('sim_TAR.RData')
+```
+
+```{r, eval=FALSE}
+DMAE_df = data.frame(rbind(
+c(DMAE_250$list0.01$ksm, DMAE_250$list0.01$loc, DMAE_250$list0.01$loc_d2),
+c(DMAE_250$list0.05$ksm, DMAE_250$list0.05$loc, DMAE_250$list0.05$loc_d2),
+
+c(DMAE_500$list0.01$ksm, DMAE_500$list0.01$loc, DMAE_500$list0.01$loc_d2),
+c(DMAE_500$list0.05$ksm, DMAE_500$list0.05$loc, DMAE_500$list0.05$loc_d2),
+
+c(DMAE_1000$list0.01$ksm, DMAE_1000$list0.01$loc, DMAE_1000$list0.01$loc_d2),
+c(DMAE_1000$list0.05$ksm, DMAE_1000$list0.05$loc, DMAE_1000$list0.05$loc_d2)
+))
+DMAE_df
+write.csv(DMAE_df,'sim_results/TAR_DMAE_df.csv')
+```
+
+```{r, eval=FALSE}
+Z_df = data.frame(rbind(
+c(min(DMAE_250$Z_range[,1]), max(DMAE_250$Z_range[,2])),
+c(min(DMAE_500$Z_range[,1]), max(DMAE_500$Z_range[,2])),
+c(min(DMAE_1000$Z_range[,1]), max(DMAE_1000$Z_range[,2]))
+))
+Z_df
+write.csv(Z_df,'sim_results/TAR_Z_df.csv')
+```
+
+```{r, eval=FALSE}
+q_df = data.frame(rbind(
+c(min(DMAE_250$list0.01$theo_q_range[,1]), max(DMAE_250$list0.01$theo_q_range[,2])),
+c(min(DMAE_250$list0.05$theo_q_range[,1]), max(DMAE_250$list0.05$theo_q_range[,2])),
+
+c(min(DMAE_500$list0.01$theo_q_range[,1]), max(DMAE_500$list0.01$theo_q_range[,2])),
+c(min(DMAE_500$list0.05$theo_q_range[,1]), max(DMAE_500$list0.05$theo_q_range[,2])),
+
+c(min(DMAE_1000$list0.01$theo_q_range[,1]), max(DMAE_1000$list0.01$theo_q_range[,2])),
+c(min(DMAE_1000$list0.05$theo_q_range[,1]), max(DMAE_1000$list0.05$theo_q_range[,2]))
+))
+q_df
+write.csv(q_df,'sim_results/TAR_q_df.csv')
+```
+
+
+calculate for every simulation 
+
+```{r, eval=FALSE}
+DMAE_Z_df = data.frame(rbind(
+mean(DMAE_250$list0.01$DMAEs_ksm/(DMAE_250$Z_range[,2]-DMAE_250$Z_range[,1])),
+mean(DMAE_250$list0.05$DMAEs_ksm/(DMAE_250$Z_range[,2]-DMAE_250$Z_range[,1])),
+
+mean(DMAE_500$list0.01$DMAEs_ksm/(DMAE_500$Z_range[,2]-DMAE_500$Z_range[,1])),
+mean(DMAE_500$list0.05$DMAEs_ksm/(DMAE_500$Z_range[,2]-DMAE_500$Z_range[,1])),
+
+mean(DMAE_1000$list0.01$DMAEs_ksm/(DMAE_1000$Z_range[,2]-DMAE_1000$Z_range[,1])),
+mean(DMAE_1000$list0.05$DMAEs_ksm/(DMAE_1000$Z_range[,2]-DMAE_1000$Z_range[,1]))
+))
+DMAE_Z_df
+write.csv(DMAE_Z_df,'sim_results/TAR_DMAE_Z_df.csv')
+```
+
+
+```{r, eval=FALSE}
+DMAE_q_df = data.frame(rbind(
+mean(DMAE_250$list0.01$DMAEs_ksm/(DMAE_250$list0.01$theo_q_range[,2]-DMAE_250$list0.01$theo_q_range[,1])),
+mean(DMAE_250$list0.05$DMAEs_ksm/(DMAE_250$list0.05$theo_q_range[,2]-DMAE_250$list0.05$theo_q_range[,1])),
+
+mean(DMAE_500$list0.01$DMAEs_ksm/(DMAE_500$list0.01$theo_q_range[,2]-DMAE_500$list0.01$theo_q_range[,1])),
+mean(DMAE_500$list0.05$DMAEs_ksm/(DMAE_500$list0.05$theo_q_range[,2]-DMAE_500$list0.05$theo_q_range[,1])),
+
+mean(DMAE_1000$list0.01$DMAEs_ksm/(DMAE_1000$list0.01$theo_q_range[,2]-DMAE_1000$list0.01$theo_q_range[,1])),
+mean(DMAE_1000$list0.05$DMAEs_ksm/(DMAE_1000$list0.05$theo_q_range[,2]-DMAE_1000$list0.05$theo_q_range[,1]))
+))
+DMAE_q_df
+write.csv(DMAE_q_df,'sim_results/TAR_DMAE_q_df.csv')
+```
+
+
+estimation time
+
+```{r, eval=FALSE}
+# min (or hour), second
+time_df = data.frame(rbind(
+c(DMAE_250$total.time, DMAE_250$total.time/2*60/100),
+c(DMAE_500$total.time, DMAE_500$total.time/2*60/100),
+c(DMAE_1000$total.time, DMAE_1000$total.time/2*60*60/100)
+))
+time_df
+write.csv(time_df,'sim_results/TAR_time_df.csv')
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Appendix:  Other methods: np package
+
+```{r, eval=FALSE}
+# np for cutted data
+library(np)
+bw = npcdistbw(Z_cut~X_cut, tol=0.1, ftol=0.1)
+q0.01 = npqreg(bws=bw, tau=0.01)
+q0.05 = npqreg(bws=bw, tau=0.05)
+
+# bandwidth used for X & Z (same for 0.01 & 0.05)
+c(bw$xbw, bw$ybw)
+```
+
+```{r, eval=FALSE}
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-1,max(Z_cut)+2), 
+     xlab=expression(X[t]), ylab=expression(Z[t]), main="Smoothed Estimated Quantiles")
+lines(est_01$xx, theo_con_q(est_01$xx,1-0.99), col="blue")
+lines(est_05$xx, theo_con_q(est_05$xx,1-0.95), col="red")
+lines(X_cut[order(X_cut)], q0.01$quantile[order(X_cut)], col="green")
+lines(X_cut[order(X_cut)], q0.05$quantile[order(X_cut)], col="orange")
+legend("topleft",col=c("blue","red"),lty=1, cex=0.8,
+       legend=c("Theoretical 99% VaR (1% quantile)","Theoretical 95% VaR (5% quantile)"))
+legend("topright",col=c("green","orange"),lty=1, cex=0.8,
+       legend=c("Estimated 99% VaR (1% quantile)","Estimated 95% VaR (5% quantile)"))
+```
+
+
+
+
+
+
+

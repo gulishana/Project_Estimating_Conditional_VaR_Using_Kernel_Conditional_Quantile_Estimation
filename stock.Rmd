@@ -1,0 +1,607 @@
+---
+title: "TGT"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, 
+                      echo=TRUE, eval=TRUE)
+```
+
+
+
+
+## Functions for Estimating the Conditional VaR
+
+```{r}
+# function for estimating conditional quantile
+kernel_con_q_est = function(X,Z,p,h){
+    
+    # generate grids for X & Z(quantile) directions
+    xx = seq(min(X), max(X), length.out=1000)
+    #xx = X[order(X)]
+    qq = Z[order(Z)] 
+    
+    # calculate the weight Wi(x) for each x in the xx
+    kernel_m = outer(xx,X,"-")
+    kernel_d = dnorm(kernel_m/h)     # Gaussian Kernel with bandwidth h
+    W = kernel_d / rowSums(kernel_d)
+    
+    # get the quantile q(x) for each x in the xx,  s.t. Fn(x) closest to p
+    qq_est = rep(NA,length(xx))
+    for (i in 1:length(xx)) {
+        Fns = rep(NA,length(qq))
+        for (j in 1:length(qq)) {
+            Fns[j] = sum( W[i,]*(Z<=qq[j]) )  # element-wise production
+        }
+        index = which.min(abs(Fns-p))
+        qq_est[i] = qq[index]
+    }
+    return(list(xx=xx, qq_est=qq_est))
+}
+```
+
+```{r}
+# estimate conditional quantile with "kernel conditional quantile estimation"
+library(KernSmooth)
+
+estimate_con_q = function(X,Z,p,h0.5=NULL,dpill_trim){
+    # get h0.5 if not given
+    if (is.null(h0.5)) { 
+        h0.5 = dpill(X,Z, trim=dpill_trim,      #  trim = min(0.05,10/length(X))
+                     blockmax=ceiling(length(X)/10), divisor=10)
+    }
+    
+    # calculate optimal h
+    opt_h = (2/pi * p*(1-p) * dnorm(qnorm(p))^(-2) * h0.5^5) ^ (1/5)
+        
+    # estimate conditional quantile using opt_h
+    qq_est1 = kernel_con_q_est(X,Z,p,opt_h)
+        
+    # estimate conditional quantile using sqrt(2)*opt_h
+    qq_est2 = kernel_con_q_est(X,Z,p,sqrt(2)*opt_h)
+        
+    # bias correction
+    qq_est = 2*qq_est1$qq_est - qq_est2$qq_est
+    
+    return(list(xx=qq_est1$xx, qq_est=qq_est, h0.5=h0.5, opt_h=opt_h))
+}
+```
+
+
+```{r}
+# function for cutting off the extreme values
+cut_data = function(X, Z, Date, cutoff=0.05){
+
+    # cutoff the tail of each end
+    cuts = as.vector(quantile(X, probs=c(cutoff,1-cutoff))) # both ends of X
+    index = which((X>cuts[1]) & (X<cuts[2]))
+    X_cut = X[index]
+    Z_cut = Z[index]
+    Date_cut = Date[index]
+
+    return(list(X_cut=X_cut, Z_cut=Z_cut, Date_cut=Date_cut, cuts=cuts))
+}
+```
+
+
+
+
+
+
+# Stock Daily Data
+
+```{r}
+data = read.csv('stock/TGT.csv')
+data$Date = as.Date(data$Date)
+c(min(data$Date), max(data$Date))
+```
+
+```{r}
+# calculate the returns
+data$return = rep(NA,nrow(data))
+for (i in 2:nrow(data)) {
+    data$return[i] = (data$Adj.Close[i] - data$Adj.Close[i-1])/data$Adj.Close[i-1]
+}
+data = data[-1,]
+c(min(data$Date), max(data$Date))
+```
+
+```{r}
+plot(return~Date,data, type="l", xlab="Date",ylab="return", main="Daily Return")
+```
+
+
+
+
+### (1) One Year - 2019
+
+```{r}
+sub_data = data[(data$Date>="2019-01-01")&(data$Date<="2019-12-31"), ]
+c(min(sub_data$Date), max(sub_data$Date))
+```
+
+```{r}
+Z = sub_data$return
+n = length(Z)
+X = Z[1:(n-1)]
+Z = Z[2:n]
+Date = sub_data$Date[2:n]
+```
+
+```{r}
+plot(Date, Z, type="l", ylim=c(min(Z)-0.02,max(Z)+0.02),
+     xlab="Date",ylab="return", main="Daily Return for 2019")
+
+# check the distribution of return Zt
+hist(Z, breaks=100, freq=FALSE, main="", xlab=expression(Z[t]))
+lines(density(Z, adjust=1),col="red",lwd=2) # kernel density estimation
+zz = seq(min(Z),max(Z),0.01)
+lines(zz, dnorm(zz,mean(Z),sd(Z)), col="blue",lwd=2)
+
+# check the scatterplot of {Xt, Zt} t=1,...,n
+plot(X, Z, ylim=c(min(Z)-0.01,max(Z)+0.01), xlab=expression(X[t]), ylab=expression(Z[t]))
+```
+
+
+
+#### Cut the data
+
+```{r}
+cutted = cut_data(X, Z, Date, cutoff=0.05)
+X_cut = cutted$X_cut
+Z_cut = cutted$Z_cut
+Date_cut = cutted$Date_cut
+```
+
+```{r}
+plot(Date_cut, Z_cut, type="l", ylim=c(min(Z_cut)-0.02,max(Z_cut)+0.02),
+     xlab="Date",ylab="return", main="Daily Return for 2019")
+
+# check the distribution of return Zt
+hist(Z_cut, breaks=100, freq=FALSE, main="", xlab=expression(Z[t]))
+lines(density(Z_cut, adjust=1),col="red",lwd=2) # kernel density estimation
+zz_cut = seq(min(Z_cut),max(Z_cut),0.01)
+lines(zz_cut, dnorm(zz_cut,mean(Z_cut),sd(Z_cut)), col="blue",lwd=2)
+
+# check the scatterplot of {Xt, Zt} t=1,...,n
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-0.01,max(Z_cut)+0.01), xlab=expression(X[t]), ylab=expression(Z[t]))
+```
+
+
+
+#### Estimate the conditional quantile
+
+```{r}
+# estimate the conditional quantile (cutted)
+est_01 = estimate_con_q(X_cut,Z_cut,p=1-0.99, dpill_trim=0.01)
+est_05 = estimate_con_q(X_cut,Z_cut,p=1-0.95, dpill_trim=0.01)
+c(est_01$h0.5, est_01$opt_h)
+c(est_05$h0.5, est_05$opt_h)
+```
+
+```{r}
+# plot estimated VaR on the scatterplot of {Xt, Zt} t=1,...,n  (cutted)
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-0.03,max(Z_cut)+0.02), 
+     xlab=expression(X[t]), ylab=expression(Z[t]), main="Daily Return for 1-Year (2019)")
+lines(locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h,gridsize=1000), col="blue")
+lines(locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h,gridsize=1000), col="red")
+lines(locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h,gridsize=1000,degree=2), col="green")
+lines(locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h,gridsize=1000,degree=2), col="orange")
+legend("topleft",col=c("blue","red"),lty=1, cex=0.8,
+       legend=c("Estimated 1% quantile (d=1)","Estimated 5% quantile (d=1)"))
+legend("topright",col=c("green","orange"),lty=1, cex=0.8,
+       legend=c("Estimated 1% quantile (d=2)","Estimated 5% quantile (d=2)"))
+```
+
+
+
+
+
+
+
+### (2) Two Year - 2018 & 2019
+
+```{r}
+sub_data = data[(data$Date>="2018-01-01")&(data$Date<="2019-12-31"), ]
+c(min(sub_data$Date), max(sub_data$Date))
+```
+
+```{r}
+Z = sub_data$return
+n = length(Z)
+X = Z[1:(n-1)]
+Z = Z[2:n]
+Date = sub_data$Date[2:n]
+```
+
+```{r}
+plot(Date, Z, type="l", ylim=c(min(Z)-0.02,max(Z)+0.02),
+     xlab="Date",ylab="return", main="Daily Return for 2018 - 2019")
+
+# check the distribution of return Zt
+hist(Z, breaks=100, freq=FALSE, main="", xlab=expression(Z[t]))
+lines(density(Z, adjust=1),col="red",lwd=2) # kernel density estimation
+zz = seq(min(Z),max(Z),0.01)
+lines(zz, dnorm(zz,mean(Z),sd(Z)), col="blue",lwd=2)
+
+# check the scatterplot of {Xt, Zt} t=1,...,n
+plot(X, Z, ylim=c(min(Z)-0.01,max(Z)+0.01), xlab=expression(X[t]), ylab=expression(Z[t]))
+```
+
+
+
+#### Cut the data
+
+```{r}
+cutted = cut_data(X, Z, Date, cutoff=0.05)
+X_cut = cutted$X_cut
+Z_cut = cutted$Z_cut
+Date_cut = cutted$Date_cut
+```
+
+```{r}
+plot(Date_cut, Z_cut, type="l", ylim=c(min(Z_cut)-0.02,max(Z_cut)+0.02),
+     xlab="Date",ylab="return", main="Daily Return for 2018 - 2019")
+
+# check the distribution of return Zt
+hist(Z_cut, breaks=100, freq=FALSE, main="", xlab=expression(Z[t]))
+lines(density(Z_cut, adjust=1),col="red",lwd=2) # kernel density estimation
+zz_cut = seq(min(Z_cut),max(Z_cut),0.01)
+lines(zz_cut, dnorm(zz_cut,mean(Z_cut),sd(Z_cut)), col="blue",lwd=2)
+
+# check the scatterplot of {Xt, Zt} t=1,...,n
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-0.01,max(Z_cut)+0.01), xlab=expression(X[t]), ylab=expression(Z[t]))
+```
+
+
+
+#### Estimate the conditional quantile
+
+```{r}
+# estimate the conditional quantile (cutted)
+est_01 = estimate_con_q(X_cut,Z_cut,p=1-0.99, dpill_trim=0.01)
+est_05 = estimate_con_q(X_cut,Z_cut,p=1-0.95, dpill_trim=0.01)
+c(est_01$h0.5, est_01$opt_h)
+c(est_05$h0.5, est_05$opt_h)
+```
+
+```{r}
+# plot estimated VaR on the scatterplot of {Xt, Zt} t=1,...,n  (cutted)
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-0.03,max(Z_cut)+0.02), 
+     xlab=expression(X[t]), ylab=expression(Z[t]), main="Daily Return for 2-Year (2018-2019)")
+lines(locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h,gridsize=1000), col="blue")
+lines(locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h,gridsize=1000), col="red")
+lines(locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h,gridsize=1000,degree=2), col="green")
+lines(locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h,gridsize=1000,degree=2), col="orange")
+legend("topleft",col=c("blue","red"),lty=1, cex=0.8,
+       legend=c("Estimated 1% quantile (d=1)","Estimated 5% quantile (d=1)"))
+legend("topright",col=c("green","orange"),lty=1, cex=0.8,
+       legend=c("Estimated 1% quantile (d=2)","Estimated 5% quantile (d=2)"))
+```
+
+
+
+
+
+
+
+
+
+### (3) Whole data - 2017-01-01 to 2020-05-01
+
+```{r}
+sub_data = data[(data$Date>="2017-01-01")&(data$Date<="2020-05-01"), ]
+c(min(sub_data$Date), max(sub_data$Date))
+```
+
+```{r}
+Z = sub_data$return
+n = length(Z)
+X = Z[1:(n-1)]
+Z = Z[2:n]
+Date = sub_data$Date[2:n]
+```
+
+```{r}
+plot(Date, Z, type="l", ylim=c(min(Z)-0.02,max(Z)+0.02),
+     xlab="Date",ylab="return", main="Daily Return")
+
+# check the distribution of return Zt
+hist(Z, breaks=100, freq=FALSE, main="", xlab=expression(Z[t]))
+lines(density(Z, adjust=1),col="red",lwd=2) # kernel density estimation
+zz = seq(min(Z),max(Z),0.01)
+lines(zz, dnorm(zz,mean(Z),sd(Z)), col="blue",lwd=2)
+
+# check the scatterplot of {Xt, Zt} t=1,...,n
+plot(X, Z, ylim=c(min(Z)-0.01,max(Z)+0.01), xlab=expression(X[t]), ylab=expression(Z[t]))
+```
+
+
+
+#### Cut the data
+
+```{r}
+cutted = cut_data(X, Z, Date, cutoff=0.05)
+X_cut = cutted$X_cut
+Z_cut = cutted$Z_cut
+Date_cut = cutted$Date_cut
+```
+
+```{r}
+plot(Date_cut, Z_cut, type="l", ylim=c(min(Z_cut)-0.02,max(Z_cut)+0.02),
+     xlab="Date",ylab="return", main="Daily Return")
+
+# check the distribution of return Zt
+hist(Z_cut, breaks=100, freq=FALSE, main="", xlab=expression(Z[t]))
+lines(density(Z_cut, adjust=1),col="red",lwd=2) # kernel density estimation
+zz_cut = seq(min(Z_cut),max(Z_cut),0.01)
+lines(zz_cut, dnorm(zz_cut,mean(Z_cut),sd(Z_cut)), col="blue",lwd=2)
+
+# check the scatterplot of {Xt, Zt} t=1,...,n
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-0.01,max(Z_cut)+0.01), xlab=expression(X[t]), ylab=expression(Z[t]))
+```
+
+
+
+#### Estimate the conditional quantile
+
+```{r}
+# estimate the conditional quantile (cutted)
+est_01 = estimate_con_q(X_cut,Z_cut,p=1-0.99, dpill_trim=0.01)
+est_05 = estimate_con_q(X_cut,Z_cut,p=1-0.95, dpill_trim=0.01)
+c(est_01$h0.5, est_01$opt_h)
+c(est_05$h0.5, est_05$opt_h)
+```
+
+```{r}
+# plot estimated VaR on the scatterplot of {Xt, Zt} t=1,...,n  (cutted)
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-0.03,max(Z_cut)+0.02), 
+     xlab=expression(X[t]), ylab=expression(Z[t]), main="Daily Return for over 3-Year (2017-now)")
+lines(locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h,gridsize=1000), col="blue")
+lines(locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h,gridsize=1000), col="red")
+lines(locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h,gridsize=1000,degree=2), col="green")
+lines(locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h,gridsize=1000,degree=2), col="orange")
+legend("topleft",col=c("blue","red"),lty=1, cex=0.8,
+       legend=c("Estimated 1% quantile (d=1)","Estimated 5% quantile (d=1)"))
+legend("topright",col=c("green","orange"),lty=1, cex=0.8,
+       legend=c("Estimated 1% quantile (d=2)","Estimated 5% quantile (d=2)"))
+```
+
+
+
+
+
+
+
+
+
+
+# Stock Monthly data
+
+```{r}
+mon_data = read.csv('stock/TGT_mon.csv')
+mon_data$Date = as.Date(mon_data$Date)
+c(min(mon_data$Date), max(mon_data$Date))
+nrow(mon_data)
+```
+
+```{r}
+# calculate the returns
+mon_data$return = rep(NA,nrow(mon_data))
+for (i in 2:nrow(mon_data)) {
+    mon_data$return[i] = (mon_data$Adj.Close[i] - mon_data$Adj.Close[i-1])/mon_data$Adj.Close[i-1]
+}
+mon_data = mon_data[-1,]
+c(min(mon_data$Date), max(mon_data$Date))
+```
+
+```{r}
+plot(return~Date,mon_data, type="l", xlab="Month",ylab="return", main="Monthly Return")
+```
+
+
+
+### (1) Whole data
+
+```{r}
+sub_data = mon_data
+c(min(sub_data$Date), max(sub_data$Date))
+```
+
+```{r}
+Z = sub_data$return
+n = length(Z)
+X = Z[1:(n-1)]
+Z = Z[2:n]
+Date = sub_data$Date[2:n]
+```
+
+```{r}
+plot(Date, Z, type="l", ylim=c(min(Z)-0.02,max(Z)+0.02),
+     xlab="Month",ylab="return", main="Monthly Return")
+
+# check the distribution of return Zt
+hist(Z, breaks=100, freq=FALSE, main="", xlab=expression(Z[t]))
+lines(density(Z, adjust=1),col="red",lwd=2) # kernel density estimation
+zz = seq(min(Z),max(Z),0.01)
+lines(zz, dnorm(zz,mean(Z),sd(Z)), col="blue",lwd=2)
+
+# check the scatterplot of {Xt, Zt} t=1,...,n
+plot(X, Z, ylim=c(min(Z)-0.02,max(Z)+0.02), xlab=expression(X[t]), ylab=expression(Z[t]))
+```
+
+
+
+#### Cut the data
+
+```{r}
+cutted = cut_data(X, Z, Date, cutoff=0.05)
+X_cut = cutted$X_cut
+Z_cut = cutted$Z_cut
+Date_cut = cutted$Date_cut
+```
+
+```{r}
+plot(Date_cut, Z_cut, type="l", ylim=c(min(Z_cut)-0.02,max(Z_cut)+0.02),
+     xlab="Month",ylab="return", main="Monthly Return")
+
+# check the distribution of return Zt
+hist(Z_cut, breaks=100, freq=FALSE, main="", xlab=expression(Z[t]))
+lines(density(Z_cut, adjust=1),col="red",lwd=2) # kernel density estimation
+zz_cut = seq(min(Z_cut),max(Z_cut),0.01)
+lines(zz_cut, dnorm(zz_cut,mean(Z_cut),sd(Z_cut)), col="blue",lwd=2)
+
+# check the scatterplot of {Xt, Zt} t=1,...,n
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-0.01,max(Z_cut)+0.01), xlab=expression(X[t]), ylab=expression(Z[t]))
+```
+
+
+
+#### Estimate the conditional quantile
+
+```{r}
+# estimate the conditional quantile (cutted)
+est_01 = estimate_con_q(X_cut,Z_cut,p=1-0.99, dpill_trim=0.01)
+est_05 = estimate_con_q(X_cut,Z_cut,p=1-0.95, dpill_trim=0.01)
+c(est_01$h0.5, est_01$opt_h)
+c(est_05$h0.5, est_05$opt_h)
+```
+
+```{r}
+# plot estimated VaR on the scatterplot of {Xt, Zt} t=1,...,n  (cutted)
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-0.03,max(Z_cut)+0.02), 
+     xlab=expression(X[t]), ylab=expression(Z[t]), main="Monthly Return")
+lines(locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h,gridsize=1000), col="blue")
+lines(locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h,gridsize=1000), col="red")
+lines(locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h,gridsize=1000,degree=2), col="green")
+lines(locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h,gridsize=1000,degree=2), col="orange")
+legend("topleft",col=c("blue","red"),lty=1, cex=0.8,
+       legend=c("Estimated 1% quantile (d=1)","Estimated 5% quantile (d=1)"))
+legend("topright",col=c("green","orange"),lty=1, cex=0.8,
+       legend=c("Estimated 1% quantile (d=2)","Estimated 5% quantile (d=2)"))
+```
+
+
+
+
+
+
+
+### (2) Data without 2020
+
+```{r}
+sub_data = mon_data[(mon_data$Date<="2019-12-31"), ]
+c(min(sub_data$Date), max(sub_data$Date))
+```
+
+```{r}
+Z = sub_data$return
+n = length(Z)
+X = Z[1:(n-1)]
+Z = Z[2:n]
+Date = sub_data$Date[2:n]
+```
+
+```{r}
+plot(Date, Z, type="l", ylim=c(min(Z)-0.02,max(Z)+0.02),
+     xlab="Month",ylab="return", main="Monthly Return")
+
+# check the distribution of return Zt
+hist(Z, breaks=100, freq=FALSE, main="", xlab=expression(Z[t]))
+lines(density(Z, adjust=1),col="red",lwd=2) # kernel density estimation
+zz = seq(min(Z),max(Z),0.01)
+lines(zz, dnorm(zz,mean(Z),sd(Z)), col="blue",lwd=2)
+
+# check the scatterplot of {Xt, Zt} t=1,...,n
+plot(X, Z, ylim=c(min(Z)-0.01,max(Z)+0.01), xlab=expression(X[t]), ylab=expression(Z[t]))
+```
+
+
+
+#### Cut the data
+
+```{r}
+cutted = cut_data(X, Z, Date, cutoff=0.05)
+X_cut = cutted$X_cut
+Z_cut = cutted$Z_cut
+Date_cut = cutted$Date_cut
+```
+
+```{r}
+plot(Date_cut, Z_cut, type="l", ylim=c(min(Z_cut)-0.02,max(Z_cut)+0.02),
+     xlab="Month",ylab="return", main="Monthly Return")
+
+# check the distribution of return Zt
+hist(Z_cut, breaks=100, freq=FALSE, main="", xlab=expression(Z[t]))
+lines(density(Z_cut, adjust=1),col="red",lwd=2) # kernel density estimation
+zz_cut = seq(min(Z_cut),max(Z_cut),0.01)
+lines(zz_cut, dnorm(zz_cut,mean(Z_cut),sd(Z_cut)), col="blue",lwd=2)
+
+# check the scatterplot of {Xt, Zt} t=1,...,n
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-0.01,max(Z_cut)+0.01), xlab=expression(X[t]), ylab=expression(Z[t]))
+```
+
+
+
+#### Estimate the conditional quantile
+
+```{r}
+# estimate the conditional quantile (cutted)
+est_01 = estimate_con_q(X_cut,Z_cut,p=1-0.99, dpill_trim=0.01)
+est_05 = estimate_con_q(X_cut,Z_cut,p=1-0.95, dpill_trim=0.01)
+c(est_01$h0.5, est_01$opt_h)
+c(est_05$h0.5, est_05$opt_h)
+```
+
+```{r}
+# plot estimated VaR on the scatterplot of {Xt, Zt} t=1,...,n  (cutted)
+plot(X_cut, Z_cut, ylim=c(min(Z_cut)-0.03,max(Z_cut)+0.02), 
+     xlab=expression(X[t]), ylab=expression(Z[t]), main="Monthly Return without 2020")
+lines(locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h,gridsize=1000), col="blue")
+lines(locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h,gridsize=1000), col="red")
+lines(locpoly(est_01$xx,est_01$qq_est,kernel="normal",bandwidth=est_01$opt_h,gridsize=1000,degree=2), col="green")
+lines(locpoly(est_05$xx,est_05$qq_est,kernel="normal",bandwidth=est_05$opt_h,gridsize=1000,degree=2), col="orange")
+legend("topleft",col=c("blue","red"),lty=1, cex=0.8,
+       legend=c("Estimated 1% quantile (d=1)","Estimated 5% quantile (d=1)"))
+legend("topright",col=c("green","orange"),lty=1, cex=0.8,
+       legend=c("Estimated 1% quantile (d=2)","Estimated 5% quantile (d=2)"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
